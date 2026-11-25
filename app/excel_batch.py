@@ -214,23 +214,31 @@ def export_report(
 # ---------------------------------------------------------------------------
 # 总流程
 # ---------------------------------------------------------------------------
-def process_directory(input_dir: Path, output_path: Path) -> dict:
-    """串联全部步骤，返回统计信息字典。"""
+def run_pipeline(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """执行读取、清洗、校验、去重，返回 (有效订单, 被拒记录, 统计信息)。
+
+    不做任何输出，供报表导出（process_directory）与数据库导入（app.db）共用。
+    """
     raw = read_order_files(input_dir)
     cleaned = clean_orders(raw)
     valid, invalid = validate_orders(cleaned)
     kept, duplicates = deduplicate_orders(valid)
     rejected = pd.concat([invalid, duplicates], ignore_index=True)
 
-    export_report(kept, rejected, output_path)
-
-    return {
+    stats = {
         "读取行数": len(raw),
         "有效行数": len(kept),
         "校验失败": len(invalid),
         "重复订单": len(duplicates),
-        "输出文件": str(output_path),
     }
+    return kept, rejected, stats
+
+
+def process_directory(input_dir: Path, output_path: Path) -> dict:
+    """串联全部步骤并导出 Excel 报表，返回统计信息字典。"""
+    kept, rejected, stats = run_pipeline(input_dir)
+    export_report(kept, rejected, output_path)
+    return {**stats, "输出文件": str(output_path)}
 
 
 def main(argv: list[str]) -> int:
