@@ -1,6 +1,6 @@
-# 企业 Excel 订单数据管理系统
+# super-duper-octo-parakeet
 
-最小化的订单数据闭环项目，用于学习基础全栈开发与业务自动化。
+企业 Excel 订单数据管理系统：批量读取 Excel 订单 → 清洗、校验、去重 → 写入 SQLite → 网页查询/修改 → 导出 Excel 报表。
 
 当前进度：**阶段一（Python Excel 批量处理）**
 
