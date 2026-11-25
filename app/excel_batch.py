@@ -18,8 +18,19 @@ from pathlib import Path
 
 import pandas as pd
 
-# 标准列名（输入 Excel 表头必须与之一致）
+# 标准列名：程序内部统一使用的字段名
 REQUIRED_COLUMNS = ["订单号", "客户", "产品", "数量", "单价", "日期"]
+
+# 表头别名：不同系统导出的 Excel 表头写法不同，这里把常见写法映射到标准列名。
+# 新增一种写法只需在此处加一个别名，业务代码无需改动。
+COLUMN_ALIASES = {
+    "订单号": ["订单号", "订单编号", "订单ID", "order_id"],
+    "客户": ["客户", "客户名称", "客户名", "customer"],
+    "产品": ["产品", "产品名称", "商品", "product"],
+    "数量": ["数量", "件数", "quantity", "qty"],
+    "单价": ["单价", "单价(元)", "单价（元）", "unit_price", "price"],
+    "日期": ["日期", "下单日期", "订单日期", "date"],
+}
 # 记录来源信息的辅助列
 SOURCE_COLUMNS = ["source_file", "source_row"]
 
@@ -40,10 +51,8 @@ def read_order_files(input_dir: Path) -> pd.DataFrame:
 
     frames = []
     for path in files:
-        df = pd.read_excel(path, dtype=object)
-        missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-        if missing:
-            raise ValueError(f"{path.name} 缺少列: {missing}")
+        raw = pd.read_excel(path, dtype=object)
+        df = map_columns(raw, source_name=path.name)
 
         df = df[REQUIRED_COLUMNS].copy()
         # 表头占第 1 行，数据从第 2 行开始；reset_index 后 index 0 对应第 2 行
@@ -52,6 +61,33 @@ def read_order_files(input_dir: Path) -> pd.DataFrame:
         frames.append(df)
 
     return pd.concat(frames, ignore_index=True)
+
+
+def map_columns(df: pd.DataFrame, source_name: str = "") -> pd.DataFrame:
+    """把原始表头按 COLUMN_ALIASES 映射为标准列名，返回新 DataFrame。
+
+    - 表头先去除首尾空白，再与别名比对（大小写不敏感）。
+    - 任一标准列找不到对应别名时抛出 ValueError，并列出实际表头，便于排查。
+    """
+    # 建立 "别名(小写, 去空白) -> 标准列名" 的查找表
+    lookup = {}
+    for standard, aliases in COLUMN_ALIASES.items():
+        for alias in aliases:
+            lookup[alias.strip().lower()] = standard
+
+    rename_map = {}
+    for header in df.columns:
+        key = str(header).strip().lower()
+        if key in lookup:
+            rename_map[header] = lookup[key]
+
+    mapped = df.rename(columns=rename_map)
+    missing = [c for c in REQUIRED_COLUMNS if c not in mapped.columns]
+    if missing:
+        raise ValueError(
+            f"{source_name} 缺少列: {missing}；实际表头: {list(df.columns)}"
+        )
+    return mapped
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +103,8 @@ def clean_orders(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["订单号", "客户", "产品"]:
         out[col] = out[col].apply(_clean_text)
 
-    out["数量"] = pd.to_numeric(out["数量"].apply(_clean_text), errors="coerce")
-    out["单价"] = pd.to_numeric(out["单价"].apply(_clean_text), errors="coerce")
+    out["数量"] = out["数量"].apply(_parse_number)
+    out["单价"] = out["单价"].apply(_parse_number)
     out["日期"] = pd.to_datetime(out["日期"].apply(_clean_text), errors="coerce")
 
     # 金额 = 数量 × 单价，便于报表直接使用
@@ -82,6 +118,24 @@ def _clean_text(value):
         return None
     text = str(value).strip()
     return text if text else None
+
+
+def _parse_number(value):
+    """数字清洗：兼容数字、纯字符串、带 ¥/￥/千分位逗号的写法。
+
+    无法解析时返回 None，交给校验环节统一报错，而不是在这里静默丢弃。
+    """
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        return float(value)
+    text = _clean_text(value)
+    if text is None:
+        return None
+    # 去掉货币符号与千分位，例如 "¥1,299.00" -> "1299.00"
+    text = text.replace("¥", "").replace("￥", "").replace(",", "").strip()
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
